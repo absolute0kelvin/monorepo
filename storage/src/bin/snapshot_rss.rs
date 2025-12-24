@@ -7,7 +7,7 @@ use commonware_storage::{
 use commonware_utils::{sequence::FixedBytes, NZU64, NZUsize};
 use std::{env, path::PathBuf, time::Duration};
 
-///Usage: usr/bin/time -l cargo run -p commonware-storage --bin snapshot_rss --release --  --ordered  --n 150000000  --updates-per-iter 50000  --sleep-ms 50  --commit-every 1 --storage-dir ./tmp_data
+///Usage: usr/bin/time -l cargo run -p commonware-storage --bin snapshot_rss --release --  --ordered  --n 150000000  --updates-per-iter 50000  --sleep-ms 0  --commit-every 1 --storage-dir ./tmp_data
 
 
 // Tiny RNG (no deps)
@@ -169,6 +169,16 @@ fn main() {
                         (i + 1) as f64 / n as f64 * 100.0
                     );
                 }
+
+                // 每 1,000,000 个 key 提交一次，释放内存
+                if (i + 1) % 1_000_000 == 0 && (i + 1) < n {
+                    let mut committed = db.merkleize();
+                    committed.commit(None).await.expect("commit");
+                    if do_sync {
+                        committed.sync().await.expect("sync");
+                    }
+                    db = committed.into_dirty();
+                }
             }
             eprintln!("population took: {:?}", pop_start.elapsed());
 
@@ -240,6 +250,16 @@ fn main() {
                         n,
                         (i + 1) as f64 / n as f64 * 100.0
                     );
+                }
+
+                // 每 1,000,000 个 key 提交一次，释放内存
+                if (i + 1) % 1_000_000 == 0 && (i + 1) < n {
+                    let mut committed = db.merkleize();
+                    committed.commit(None).await.expect("commit");
+                    if do_sync {
+                        committed.sync().await.expect("sync");
+                    }
+                    db = committed.into_dirty();
                 }
             }
             eprintln!("population took: {:?}", pop_start.elapsed());

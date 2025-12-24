@@ -9,7 +9,6 @@ use std::{env, path::PathBuf, time::Duration};
 
 ///Usage: usr/bin/time -l cargo run -p commonware-storage --bin snapshot_rss --release --  --ordered  --n 150000000  --updates-per-iter 50000  --sleep-ms 0  --commit-every 1 --storage-dir ./tmp_data
 
-
 // Tiny RNG (no deps)
 #[derive(Clone)]
 struct XorShift64 {
@@ -62,8 +61,8 @@ fn parse_arg_path(args: &[String], name: &str) -> Option<PathBuf> {
 
 fn fill_32(rng: &mut XorShift64) -> [u8; 32] {
     let mut out = [0u8; 32];
-    for (chunk, v) in out.chunks_exact_mut(8).zip([0u64; 4].map(|_| rng.next_u64())) {
-        chunk.copy_from_slice(&v.to_be_bytes());
+    for chunk in out.chunks_exact_mut(8) {
+        chunk.copy_from_slice(&rng.next_u64().to_be_bytes());
     }
     out
 }
@@ -74,7 +73,7 @@ fn main() {
     // Defaults chosen so it’s easy to scale up while keeping runtime overhead modest.
     let n = parse_arg_usize(&args, "--n", 1_000_000);
     let updates_per_iter = parse_arg_usize(&args, "--updates-per-iter", 50_000);
-    let total_updates_limit = parse_arg_u64(&args, "--total-updates", 100*50_000);
+    let total_updates_limit = parse_arg_u64(&args, "--total-updates", 100 * 50_000);
     let sleep_ms = parse_arg_u64(&args, "--sleep-ms", 0);
     let commit_every = parse_arg_usize(&args, "--commit-every", 1);
     let do_sync = has_flag(&args, "--sync");
@@ -83,8 +82,8 @@ fn main() {
     let page_size = parse_arg_usize(&args, "--page-size", 4096);
     let page_cache_pages = parse_arg_usize(&args, "--page-cache-pages", 64);
 
-    let mmr_items_per_blob = parse_arg_u64(&args, "--mmr-items-per-blob", 128*1024);
-    let log_items_per_blob = parse_arg_u64(&args, "--log-items-per-blob", 128*1024);
+    let mmr_items_per_blob = parse_arg_u64(&args, "--mmr-items-per-blob", 128 * 1024);
+    let log_items_per_blob = parse_arg_u64(&args, "--log-items-per-blob", 128 * 1024);
     let mmr_write_buffer = parse_arg_usize(&args, "--mmr-write-buffer", 1024 * 1024);
     let log_write_buffer = parse_arg_usize(&args, "--log-write-buffer", 1024 * 1024);
 
@@ -120,13 +119,12 @@ fn main() {
         type K = FixedBytes<32>;
         type V = FixedBytes<32>;
 
-        // Build stable keys (kept in memory; snapshot key count stays constant).
-        let mut keys: Vec<K> = Vec::with_capacity(n);
-        for i in 0..n {
+        // Generate key deterministically from index (no storage needed).
+        fn make_key(i: usize) -> K {
             let mut k = [0u8; 32];
             k[..8].copy_from_slice(&(i as u64).to_be_bytes());
             k[8..16].copy_from_slice(&(i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15).to_be_bytes());
-            keys.push(K::new(k));
+            K::new(k)
         }
 
         let cfg = FixedConfig {
@@ -156,9 +154,10 @@ fn main() {
 
             eprintln!("populating {} keys (create)...", n);
             let pop_start = std::time::Instant::now();
-            for (i, k) in keys.iter().enumerate() {
+            for i in 0..n {
+                let k = make_key(i);
                 let v = V::new(fill_32(&mut rng));
-                let created = db.create(k.clone(), v).await.expect("create");
+                let created = db.create(k, v).await.expect("create");
                 debug_assert!(created, "expected new key");
 
                 if (i + 1) % 100_000 == 0 || i + 1 == n {
@@ -170,7 +169,7 @@ fn main() {
                     );
                 }
 
-                // 每 1,000,000 个 key 提交一次，释放内存
+                // Commit every 1,000,000 keys to release memory
                 if (i + 1) % 1_000_000 == 0 && (i + 1) < n {
                     let mut committed = db.merkleize();
                     committed.commit(None).await.expect("commit");
@@ -198,8 +197,9 @@ fn main() {
                 let mut dirty = db.into_dirty();
                 for _ in 0..updates_per_iter {
                     let ki = (rng.next_u64() as usize) % n;
+                    let k = make_key(ki);
                     let v = V::new(fill_32(&mut rng));
-                    dirty.update(keys[ki].clone(), v).await.expect("update");
+                    dirty.update(k, v).await.expect("update");
                 }
 
                 db = dirty.merkleize();
@@ -238,9 +238,10 @@ fn main() {
 
             eprintln!("populating {} keys (create)...", n);
             let pop_start = std::time::Instant::now();
-            for (i, k) in keys.iter().enumerate() {
+            for i in 0..n {
+                let k = make_key(i);
                 let v = V::new(fill_32(&mut rng));
-                let created = db.create(k.clone(), v).await.expect("create");
+                let created = db.create(k, v).await.expect("create");
                 debug_assert!(created, "expected new key");
 
                 if (i + 1) % 100_000 == 0 || i + 1 == n {
@@ -252,7 +253,7 @@ fn main() {
                     );
                 }
 
-                // 每 1,000,000 个 key 提交一次，释放内存
+                // Commit every 1,000,000 keys to release memory
                 if (i + 1) % 1_000_000 == 0 && (i + 1) < n {
                     let mut committed = db.merkleize();
                     committed.commit(None).await.expect("commit");
@@ -280,8 +281,9 @@ fn main() {
                 let mut dirty = db.into_dirty();
                 for _ in 0..updates_per_iter {
                     let ki = (rng.next_u64() as usize) % n;
+                    let k = make_key(ki);
                     let v = V::new(fill_32(&mut rng));
-                    dirty.update(keys[ki].clone(), v).await.expect("update");
+                    dirty.update(k, v).await.expect("update");
                 }
 
                 db = dirty.merkleize();
